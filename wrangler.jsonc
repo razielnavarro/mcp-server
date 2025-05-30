@@ -10,6 +10,14 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "supermarket",
+			"database_id": "a0b80c29-7c1c-4a4a-b729-967c526b0ed5",
+			"migrations_dir": "drizzle/migrations"
+		}
+	],
 	"migrations": [
 		{
 			"new_sqlite_classes": [
