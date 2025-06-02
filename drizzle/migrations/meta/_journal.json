@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1748555314490,
-      "tag": "0000_sharp_zaran",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1748555830464,
-      "tag": "0001_hot_stick",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1748555917292,
-      "tag": "0002_bumpy_radioactive_man",
+      "when": 1748631894975,
+      "tag": "0000_watery_malcolm_colcord",
       "breakpoints": true
     }
   ]

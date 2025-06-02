@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/d1";
 import * as entities from "./entities";
 import { ItemSchema } from "./schemas/items.schema";
 import { CartItemSchema } from "./schemas/carts.schema";
+import { BulkCartSchema } from "./schemas/bulk.schema";
 import { eq, and } from "drizzle-orm";
 
 interface Env {
@@ -34,11 +35,8 @@ async function listItems(env: Env) {
   return await db.select().from(entities.items).all();
 }
 
-async function addToCart(
-  env: Env,
-  input: z.infer<typeof CartItemSchema.CartItemSchema>
-) {
-  CartItemSchema.CartItemSchema.parse(input);
+async function addToCart(env: Env, input: z.infer<typeof CartItemSchema>) {
+  CartItemSchema.parse(input);
 
   const db = getDb(env);
   const { userId, itemId, quantity } = input;
@@ -68,11 +66,8 @@ async function addToCart(
   return { success: true };
 }
 
-async function removeFromCart(
-  env: Env,
-  input: z.infer<typeof CartItemSchema.CartItemSchema>
-) {
-  CartItemSchema.CartItemSchema.parse(input);
+async function removeFromCart(env: Env, input: z.infer<typeof CartItemSchema>) {
+  CartItemSchema.parse(input);
 
   const db = getDb(env);
   const { userId, itemId, quantity } = input;
@@ -140,96 +135,63 @@ async function checkout(env: Env, userId: string) {
 }
 
 // Define our MCP agent with tools
-export class MyMCP extends McpAgent {
+export class MyMCP extends McpAgent<Env> {
   server = new McpServer({
     name: "Authless Calculator",
     version: "1.0.0",
   });
 
   async init() {
-    // Simple addition tool
-    this.server.tool(
-      "add",
-      { a: z.number(), b: z.number() },
-      async ({ a, b }) => ({
-        content: [{ type: "text", text: String(a + b) }],
-      })
-    );
-
-    // Calculator tool with multiple operations
-    this.server.tool(
-      "calculate",
-      {
-        operation: z.enum(["add", "subtract", "multiply", "divide"]),
-        a: z.number(),
-        b: z.number(),
-      },
-      async ({ operation, a, b }) => {
-        let result: number;
-        switch (operation) {
-          case "add":
-            result = a + b;
-            break;
-          case "subtract":
-            result = a - b;
-            break;
-          case "multiply":
-            result = a * b;
-            break;
-          case "divide":
-            if (b === 0)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: Cannot divide by zero",
-                  },
-                ],
-              };
-            result = a / b;
-            break;
-        }
-        return { content: [{ type: "text", text: String(result) }] };
-      }
-    );
-
     // Supermarket tools:
 
     // 1. List items
-    this.server.tool(
-      "listItems",
-      { schema: z.object({}) },
-      async (_args, { env }) => {
-        const items = await listItems(env);
-        return {
-          content: [{ type: "text", text: JSON.stringify(items) }],
-        };
-      }
-    );
+    this.server.tool("listItems", { schema: z.object({}) }, async (_args) => {
+      const items = await listItems(this.env);
+      return {
+        content: [{ type: "text", text: JSON.stringify(items) }],
+      };
+    });
 
     // 2. Add to cart
+    this.server.tool("addToCart", { schema: CartItemSchema }, async (args) => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(await addToCart(this.env, args.schema)),
+        },
+      ],
+    }));
+
+    // add multiple items to cart
     this.server.tool(
-      "addToCart",
-      { schema: CartItemSchema },
-      async (args, { env }) => ({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(await addToCart(env, args)),
-          },
-        ],
-      })
+      "addMultipleToCart",
+      { schema: BulkCartSchema },
+      async (args) => {
+        const { userId, items } = args.schema;
+        for (const { itemId, quantity } of items) {
+          // Re-use your existing single-item addToCart logic:
+          await addToCart(this.env, { userId, itemId, quantity });
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ success: true }),
+            },
+          ],
+        };
+      }
     );
 
     // 3. Remove from cart
     this.server.tool(
       "removeFromCart",
       { schema: CartItemSchema },
-      async (args, { env }) => ({
+      async (args) => ({
         content: [
           {
             type: "text",
-            text: JSON.stringify(await removeFromCart(env, args)),
+            text: JSON.stringify(await removeFromCart(this.env, args.schema)),
           },
         ],
       })
@@ -239,11 +201,13 @@ export class MyMCP extends McpAgent {
     this.server.tool(
       "viewCart",
       { schema: z.object({ userId: z.string() }) },
-      async ({ userId }, { env }) => ({
+      async (userId) => ({
         content: [
           {
             type: "text",
-            text: JSON.stringify(await viewCart(env, userId)),
+            text: JSON.stringify(
+              await viewCart(this.env, userId.schema.userId)
+            ),
           },
         ],
       })
@@ -253,14 +217,133 @@ export class MyMCP extends McpAgent {
     this.server.tool(
       "checkout",
       { schema: z.object({ userId: z.string() }) },
-      async ({ userId }, { env }) => ({
+      async (userId) => ({
         content: [
           {
             type: "text",
-            text: JSON.stringify(await checkout(env, userId)),
+            text: JSON.stringify(
+              await checkout(this.env, userId.schema.userId)
+            ),
           },
         ],
       })
+    );
+
+    // 6. Add item
+    this.server.tool(
+      "addItem",
+      {
+        schema: z.object({
+          id: z.string(),
+          name: z.string(),
+          price: z.number(),
+        }),
+      },
+      async (args) => {
+        const db = getDb(this.env);
+        await db
+          .insert(entities.items)
+          .values({
+            id: args.schema.id,
+            name: args.schema.name,
+            price: args.schema.price,
+          })
+          .run();
+        return {
+          content: [{ type: "text", text: "Item added!" }],
+        };
+      }
+    );
+
+    // 7. Update item
+    this.server.tool(
+      "updateItem",
+      {
+        schema: z.object({
+          id: z.string(),
+          name: z.string().optional(),
+          price: z.number().optional(),
+        }),
+      },
+      async (args) => {
+        const db = getDb(this.env);
+        const { id, name, price } = args.schema;
+
+        // Build update object
+        const update: Record<string, any> = {};
+        if (name !== undefined) update.name = name;
+        if (price !== undefined) update.price = price;
+
+        if (Object.keys(update).length === 0) {
+          return {
+            content: [{ type: "text", text: "No fields to update." }],
+          };
+        }
+
+        const result = await db
+          .update(entities.items)
+          .set(update)
+          .where(eq(entities.items.id, id))
+          .run();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: result.success ? "Item updated!" : "Item not found.",
+            },
+          ],
+        };
+      }
+    );
+
+    // 8. Remove item
+    this.server.tool(
+      "removeItem",
+      {
+        schema: z.object({
+          id: z.string(),
+        }),
+      },
+      async (args) => {
+        const db = getDb(this.env);
+        const { id } = args.schema;
+
+        const result = await db
+          .delete(entities.items)
+          .where(eq(entities.items.id, id))
+          .run();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: result.success ? "Item removed!" : "Item not found.",
+            },
+          ],
+        };
+      }
+    );
+
+    // 9. Remove multiple items from cart
+    this.server.tool(
+      "removeMultipleFromCart",
+      { schema: BulkCartSchema },
+      async (args) => {
+        const { userId, items } = args.schema;
+        for (const { itemId, quantity } of items) {
+          // Re-use your existing single-item removeFromCart logic:
+          await removeFromCart(this.env, { userId, itemId, quantity });
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ success: true }),
+            },
+          ],
+        };
+      }
     );
   }
 }
